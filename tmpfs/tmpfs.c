@@ -9,12 +9,6 @@
 #include <sys/stat.h>
 
 
-struct tmpfs_state {
-  char *rootdir;
-};
-
-#define TMPFS_DATA ((struct tmpfs_state *) fuse_get_context()->private_data)
-
 // https://www.gnu.org/software/libc/manual/html_node/Attribute-Meanings.html
 static int do_getattr(const char *path, struct stat *st )
 {
