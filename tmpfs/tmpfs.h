@@ -17,4 +17,8 @@ int tmpfs_write(const char *path, const char *buf, size_t size, off_t offset, st
 int tmpfs_mkdir(const char *path, mode_t mode);
 int tmpfs_truncate(const char *path, off_t offset);
 int tmpfs_opendir(const char *path, struct fuse_file_info *fu);
+int tmpfs_flush(const char *, struct fuse_file_info *);
 int tmpfs_utimens(const char *, const struct timespec tv[2]);
+int tmpfs_rmdir(const char *path);
+int tmpfs_unlink(const char *path);
+int tmpfs_rename(const char *path, const char *destpath);

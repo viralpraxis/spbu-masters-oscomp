@@ -2,7 +2,7 @@
 
 ## Использование
 
-`make install` -- собрать
+`make build` -- собрать
 
 `make mount` -- примаунтить
 
@@ -14,11 +14,9 @@
 
 ## Реализованные колбэки
 
-getattr, readdir, opendir, mkdir, create, truncate, open, read, write, destroy, utimens
+getattr, readdir, opendir, mkdir, create, truncate, open, read, write, destroy, utimens, tmpfs_rmdir, unlink, rename
 
 utimes пришлось добавить, потому что иначе не работает /bin/touch
-
-удаление, unlink и прочее не успели
 
 ## Детали реализации
 

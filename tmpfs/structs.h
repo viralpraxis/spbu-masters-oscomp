@@ -4,7 +4,7 @@
 #define HEADERFILE_structs
 
 #define PATH_MAX 256
-#define BLOCK_SIZE 512
+#define BLOCK_SIZE 8196
 
 typedef struct
 {
@@ -27,7 +27,7 @@ typedef struct
 {
 	size_t block_size;
 	size_t blocks_max;
-	size_t nodex_max;
+	size_t inodes_max;
 	tmpfs_inode* nodes;
 	block* blocks;
 } storage_t;

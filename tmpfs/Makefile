@@ -1,5 +1,5 @@
-install: tmpfs.c structs.h utils.h
-	gcc tmpfs.c -Wall -D_FILE_OFFSET_BITS=64 -lfuse -o tmpfs
+build: tmpfs.c structs.h utils.h
+	gcc tmpfs.c utils.c -Wall -D_FILE_OFFSET_BITS=64 -lfuse -o tmpfs
 
 mount: tmpfs
 	./tmpfs mountpoint
@@ -15,4 +15,4 @@ test: test.sh
 
 .PHONY: mount_debug unmount
 
-default: install
+default: build
