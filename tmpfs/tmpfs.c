@@ -1,81 +1,225 @@
 #define FUSE_USE_VERSION 26
 
-#include <stdlib.h>
-#include <fuse.h>
-#include <unistd.h>
-#include <string.h>
-#include <linux/limits.h>
-#include <errno.h>
-#include <sys/stat.h>
+#include "tmpfs.h"
+#include "structs.h"
+#include "utils.h"
 
+storage_t storage;
 
-// https://www.gnu.org/software/libc/manual/html_node/Attribute-Meanings.html
-static int do_getattr(const char *path, struct stat *st )
+int tmpfs_init() {
+	storage.block_size = BLOCK_SIZE;
+	storage.nodex_max = 1024;
+	storage.blocks_max = 8096;
+	
+	storage.nodes = (tmpfs_inode*) malloc(storage.nodex_max * sizeof(tmpfs_inode));
+	storage.blocks = (block*) malloc(storage.blocks_max * sizeof(block));
+	
+	nodes_init(storage);
+	blocks_init(storage);
+	
+	return EXIT_SUCCESS;
+}
+
+void tmpfs_destroy(void *v) {
+	free(storage.nodes);
+	free(storage.blocks);
+}
+
+int tmpfs_getattr(const char *path, struct stat *stbuf)
 {
-  st->st_uid = getuid();
-  st->st_gid = getgid();
-  st->st_atime = time(NULL);
-  st->st_mtime = time(NULL);
+	if (strcmp(path, "/") == 0) {
+		stbuf->st_mode = S_IFDIR | 0755;
+		stbuf->st_nlink = 2;
+		stbuf->st_size = storage.block_size;
+		return EXIT_SUCCESS;
+	} 
+	
+	int i = find_node_index(storage, path);
+	if (i < 0) return i;
 
-  if (strcmp( path, "/") == 0) {
-    st->st_mode = S_IFDIR | 0755;
-    st->st_nlink = 2;
-  } else {
-    st->st_mode = S_IFREG | 0644;
-    st->st_nlink = 1;
-    st->st_size = 1024;
-  }
+	stbuf->st_nlink = 1;
+	stbuf->st_mode = storage.nodes[i].mode;
+	stbuf->st_size = storage.nodes[i].size;	
 
-  return EXIT_SUCCESS;
+	return EXIT_SUCCESS;
 }
 
-static int do_readdir( const char *path, void *buffer, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi ) {
-  filler( buffer, ".", NULL, 0 );
-  filler( buffer, "..", NULL, 0 );
+int tmpfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi) {
+	int i, j = -1;
+	char *dirpath = "";
+	
+	if (strcmp(path, "/") != 0) {
+		for (i = 0; i < storage.nodex_max; i++) {
+			if (storage.nodes[i].is_dir == 1 && storage.nodes[i].used == 1 && strcmp(path, storage.nodes[i].path) == 0) {
+				j = i;
+				dirpath = storage.nodes[i].path;
+				break;
+			}
+		}
 
-  filler(buffer, "cow", NULL, 0);
+		if (j == -1) return -ENOENT;
+	
+	}
+	
+	filler(buf, ".", NULL, 0);
+	filler(buf, "..", NULL, 0);
 
-  return EXIT_SUCCESS;
+	for (i = 0; i < storage.nodex_max; i++) {
+		if (storage.nodes[i].used == 1 && subdir(dirpath, storage.nodes[i].path) == 0) {
+			filler(buf, strrchr(storage.nodes[i].path, '/')+1 , NULL, 0);
+		}
+	}
+
+	return EXIT_SUCCESS;
 }
 
-static int do_read( const char *path, char *buffer, size_t size, off_t offset, struct fuse_file_info *fi ) {
-  char* content = "moo\n";
+int tmpfs_open(const char *path, struct fuse_file_info *fi) {
+	if (find_node_index(storage, path) == -ENOENT) return -ENOENT;	
 
-  memcpy(buffer, content, (size_t) sizeof(content));
-
-  return strlen(content);
+	return EXIT_SUCCESS;
 }
 
-// TODO: Provide implementation.
-static int do_mkdir( const char *path, mode_t mode) {
-  return EXIT_SUCCESS;
+int tmpfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) 
+{
+	if (find_node_index(storage, path) == -ENOENT) {
+		tmpfs_inode* file = get_free_node(storage);
+		file->mode = mode;
+		strcpy(file->path, path);	
+	}
+	
+	return EXIT_SUCCESS;
 }
 
-// TODO: Provide implementation.
-static int do_mknod (const char *path, mode_t mode, dev_t rdev) {
-  return EXIT_SUCCESS;
+int tmpfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
+	int fileblock, sizetmp, i;
+	i = find_node_index(storage, path);
+	if (i < 0) return i;
+	if (size > storage.nodes[i].size) size = storage.nodes[i].size;
+	sizetmp = storage.block_size;
+	fileblock = storage.nodes[i].start_block;
+	if (fileblock == -1) return EXIT_SUCCESS;
+	
+	while (offset-sizetmp > 0) {
+		fileblock = storage.blocks[fileblock].next_block;
+		offset -= sizetmp;
+	}
+	
+	if (offset > 0) {
+		memcpy(buf, storage.blocks[fileblock].data + offset , sizetmp-offset);
+		fileblock = storage.blocks[fileblock].next_block;
+	}
+	
+	while (offset < size) {	
+		if (offset + sizetmp > size){
+			sizetmp = size - offset;
+		}
+
+		if (fileblock == -1) break;
+		
+		memcpy(buf + offset, storage.blocks[fileblock].data , sizetmp);
+		fileblock = storage.blocks[fileblock].next_block;
+		offset += sizetmp;
+	}
+	
+	return size;
 }
 
-// TODO: Provide implementation.
-static int do_opendir (const char *, struct fuse_file_info *) {
-  return EXIT_SUCCESS;
+int tmpfs_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
+	int fileblock, sizetmp, i;
+	i = find_node_index(storage, path);
+	if (i < 0) return i;
+			
+	storage.nodes[i].size = offset;
+	sizetmp = storage.block_size;
+	fileblock = storage.nodes[i].start_block;
+
+	if (fileblock == -1 && size > 0) {
+		fileblock = get_free_block_index(storage);
+		storage.nodes[i].start_block = fileblock;
+	}
+
+	while (offset - sizetmp > 0) {
+		fileblock = storage.blocks[fileblock].next_block;
+		offset -= sizetmp;
+	}
+
+	if (offset > 0) {
+		memcpy(storage.blocks[fileblock].data + offset, buf, sizetmp-offset);
+		fileblock = storage.blocks[fileblock].next_block;
+		offset = sizetmp - offset;
+	}
+
+	while (offset < size) {	
+		if (offset + sizetmp > size) sizetmp = size - offset;
+
+		memcpy(storage.blocks[fileblock].data, buf + offset , sizetmp);
+		fileblock = storage.blocks[fileblock].next_block;
+		offset += sizetmp;
+	}
+	
+	storage.nodes[i].size += offset;
+	
+	return offset;	 
 }
 
-// TODO: Provide implementation.
-static int do_write( const char *path, const char *buffer, size_t size, off_t offset, struct fuse_file_info *info ) {
-  return EXIT_SUCCESS;
+int tmpfs_mkdir(const char *path, mode_t mode)
+{
+	if (find_node_index(storage, path) == -ENOENT) {
+		tmpfs_inode* dir = get_free_node(storage);
+		
+		dir->is_dir = 1;
+		dir->mode = S_IFDIR|mode;
+		dir->size = storage.block_size;
+		strcpy(dir->path, path);
+
+		return EXIT_SUCCESS;
+	}
+	
+	return -EEXIST;
 }
 
-static struct fuse_operations operations = {
-    .getattr  = do_getattr,
-    .mknod    = do_mknod,
-    .mkdir    = do_mkdir,
-    .read     = do_read,
-    .write    = do_write,
-    .opendir  = do_opendir,
-    .readdir  = do_readdir,
+
+int tmpfs_truncate(const char *path, off_t offset)
+{
+	return EXIT_SUCCESS;	
+}
+
+int tmpfs_opendir(const char *path, struct fuse_file_info *fu)
+{
+	if (strcmp("/", path) == 0) {
+		return EXIT_SUCCESS;
+	}
+
+	for (int i = 0; i < storage.nodex_max; i++) {
+		if (storage.nodes[i].is_dir == 1 && storage.nodes[i].used == 1 && strcmp(path, storage.nodes[i].path) == 0) {
+			return EXIT_SUCCESS;
+		}
+	}
+
+	return -ENOENT;
+}
+
+int tmpfs_utimens(const char *, const struct timespec tv[2]) {
+  return EXIT_SUCCESS; // TODO
+}
+
+struct fuse_operations operations = {
+	.getattr	 = tmpfs_getattr,
+	.readdir	 = tmpfs_readdir,
+	.opendir	 = tmpfs_opendir,
+	.mkdir		 = tmpfs_mkdir,
+	.create		 = tmpfs_create,
+	.truncate    = tmpfs_truncate,
+	.open		 = tmpfs_open,
+	.read		 = tmpfs_read,
+	.write 		 = tmpfs_write,
+	.destroy 	 = tmpfs_destroy,
+    .utimens     = tmpfs_utimens,
 };
 
-int main(int argc, char *argv[]) {
-  return fuse_main(argc, argv, &operations, NULL);
+int main(int argc, char *argv[])
+{
+	tmpfs_init();
+
+	return fuse_main(argc, argv, &operations, NULL);
 }

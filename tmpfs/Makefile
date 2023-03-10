@@ -1,4 +1,4 @@
-install: tmpfs.c
+install: tmpfs.c structs.h utils.h
 	gcc tmpfs.c -Wall -D_FILE_OFFSET_BITS=64 -lfuse -o tmpfs
 
 mount: tmpfs
@@ -10,6 +10,9 @@ mount_debug:
 unmount:
 	umount mountpoint
 
-.PHONY: mount mount_debug unmount
+test: test.sh
+	./test.sh
+
+.PHONY: mount_debug unmount
 
 default: install
