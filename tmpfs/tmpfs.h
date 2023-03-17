@@ -6,6 +6,9 @@
 #include <fnmatch.h>
 #include <fuse.h>
 
+#ifndef HEADERFILE_tmpfs
+#define HEADERFILE_tmpfs
+
 int tmpfs_init();
 void tmpfs_destroy(void *v);
 
@@ -22,3 +25,6 @@ int tmpfs_utimens(const char *, const struct timespec tv[2]);
 int tmpfs_rmdir(const char *path);
 int tmpfs_unlink(const char *path);
 int tmpfs_rename(const char *path, const char *destpath);
+int tmpfs_chmod(const char *, mode_t);
+
+#endif

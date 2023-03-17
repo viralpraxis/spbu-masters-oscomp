@@ -10,13 +10,13 @@ int tmpfs_init() {
 	storage.block_size = BLOCK_SIZE;
 	storage.inodes_max = 1024;
 	storage.blocks_max = 8096;
-	
+
 	storage.nodes = (tmpfs_inode*) malloc(storage.inodes_max * sizeof(tmpfs_inode));
 	storage.blocks = (block*) malloc(storage.blocks_max * sizeof(block));
-	
+
 	nodes_init(storage);
 	blocks_init(storage);
-	
+
 	return EXIT_SUCCESS;
 }
 
@@ -32,14 +32,14 @@ int tmpfs_getattr(const char *path, struct stat *stbuf)
 		stbuf->st_nlink = 2;
 		stbuf->st_size = storage.block_size;
 		return EXIT_SUCCESS;
-	} 
-	
+	}
+
 	int i = find_node_index(storage, path);
 	if (i < 0) return i;
 
 	stbuf->st_nlink = 1;
 	stbuf->st_mode = storage.nodes[i].mode;
-	stbuf->st_size = storage.nodes[i].size;	
+	stbuf->st_size = storage.nodes[i].size;
 
 	return EXIT_SUCCESS;
 }
@@ -47,7 +47,7 @@ int tmpfs_getattr(const char *path, struct stat *stbuf)
 int tmpfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi) {
 	int i, j = -1;
 	char *dirpath = "";
-	
+
 	if (strcmp(path, "/") != 0) {
 		for (i = 0; i < storage.inodes_max; i++) {
 			if (storage.nodes[i].is_dir == 1 && storage.nodes[i].used == 1 && strcmp(path, storage.nodes[i].path) == 0) {
@@ -58,9 +58,9 @@ int tmpfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t off
 		}
 
 		if (j == -1) return -ENOENT;
-	
+
 	}
-	
+
 	filler(buf, ".", NULL, 0);
 	filler(buf, "..", NULL, 0);
 
@@ -82,14 +82,14 @@ int tmpfs_open(const char *path, struct fuse_file_info *fi) {
 	return EXIT_SUCCESS;
 }
 
-int tmpfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) 
+int tmpfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 {
 	if (find_node_index(storage, path) == -ENOENT) {
 		tmpfs_inode* file = get_free_node(storage);
 		file->mode = mode;
-		strcpy(file->path, path);	
+		strcpy(file->path, path);
 	}
-	
+
 	return EXIT_SUCCESS;
 }
 
@@ -101,29 +101,29 @@ int tmpfs_read(const char *path, char *buf, size_t size, off_t offset, struct fu
 	sizetmp = storage.block_size;
 	next_block = storage.nodes[i].start_block;
 	if (next_block == -1) return EXIT_SUCCESS;
-	
+
 	while (offset-sizetmp > 0) {
 		next_block = storage.blocks[next_block].next_block;
 		offset -= sizetmp;
 	}
-	
+
 	if (offset > 0) {
 		memcpy(buf, storage.blocks[next_block].data + offset , sizetmp-offset);
 		next_block = storage.blocks[next_block].next_block;
 	}
-	
-	while (offset < size) {	
+
+	while (offset < size) {
 		if (offset + sizetmp > size){
 			sizetmp = size - offset;
 		}
 
 		if (next_block == -1) break;
-		
+
 		memcpy(buf + offset, storage.blocks[next_block].data , sizetmp);
 		next_block = storage.blocks[next_block].next_block;
 		offset += sizetmp;
 	}
-	
+
 	return size;
 }
 
@@ -132,7 +132,7 @@ int tmpfs_write(const char *path, const char *buf, size_t size, off_t offset, st
 	int i = find_node_index(storage, path);
 	int last = 0;
 	if (i < 0) return i;
-			
+
 	storage.nodes[i].size = offset;
 	int blocksize = storage.block_size;
 	int next_block = storage.nodes[i].start_block;
@@ -141,7 +141,7 @@ int tmpfs_write(const char *path, const char *buf, size_t size, off_t offset, st
 		next_block = get_free_block_index(storage);
 		if (next_block == -1) {
 			storage.nodes[i].size = 0;
-			return -EDQUOT;
+			return -EFBIG;
 		}
 		storage.nodes[i].start_block = next_block;
 	}
@@ -158,14 +158,14 @@ int tmpfs_write(const char *path, const char *buf, size_t size, off_t offset, st
 		offset = blocksize - offset;
 	}
 
-	while (offset < size) {	
+	while (offset < size) {
 		if (offset + blocksize > size) {
 			blocksize = size - offset;
 		}
-		
+
 		if (next_block == -1) {
 			next_block = get_free_block_index(storage);
-			if (next_block == -1) return -EDQUOT;
+			if (next_block == -1) return -EFBIG;
 			storage.blocks[last].next_block = next_block;
 		}
 
@@ -174,7 +174,7 @@ int tmpfs_write(const char *path, const char *buf, size_t size, off_t offset, st
 		next_block = storage.blocks[next_block].next_block;
 		offset += blocksize;
 	}
-	
+
 	storage.nodes[i].size += offset;
 
 	if (offset > size) {
@@ -188,7 +188,7 @@ int tmpfs_mkdir(const char *path, mode_t mode)
 {
 	if (find_node_index(storage, path) == -ENOENT) {
 		tmpfs_inode* dir = get_free_node(storage);
-		
+
 		dir->is_dir = 1;
 		dir->mode = S_IFDIR | mode;
 		dir->size = storage.block_size;
@@ -196,17 +196,14 @@ int tmpfs_mkdir(const char *path, mode_t mode)
 
 		return EXIT_SUCCESS;
 	}
-	
+
 	return -EEXIST;
 }
-
 
 int tmpfs_truncate(const char *path, off_t offset)
 {
 	int i = find_node_index(storage, path);
 	if (i < 0) return i;
-
-	if (offset >= storage.nodes[i].size) return 0;
 
 	int blocksize = storage.block_size;
 	int next_block = storage.nodes[i].start_block;
@@ -225,9 +222,9 @@ int tmpfs_truncate(const char *path, off_t offset)
 	while (next_block != -1) {
 		next_block = free_block(storage, next_block);
 	}
-	
+
 	if (offset == 0) storage.nodes[i].start_block = BLOCK_INDEX_DEFAULT;
-	
+
 	storage.nodes[i].size = offset;
 
 	return EXIT_SUCCESS;
@@ -254,7 +251,7 @@ int tmpfs_opendir(const char *path, struct fuse_file_info *fu)
 }
 
 int tmpfs_utimens(const char *, const struct timespec tv[2]) {
-  return EXIT_SUCCESS; // TODO
+  return EXIT_SUCCESS;
 }
 
 int tmpfs_rmdir(const char *path)
@@ -279,7 +276,7 @@ int tmpfs_rmdir(const char *path)
 	}
 
 	storage.nodes[i].used = 0;
-		
+
 	return EXIT_SUCCESS;
 }
 
@@ -287,26 +284,38 @@ int tmpfs_unlink(const char *path)
 {
 	int status = tmpfs_truncate(path, 0);
 	if (status < 0) return status;
-	
+
 	int i = find_node_index(storage, path);
 	storage.nodes[i].start_block = BLOCK_INDEX_DEFAULT;
 	storage.nodes[i].used = 0;
-		
+
 	return EXIT_SUCCESS;
 }
 
 int tmpfs_rename(const char *path, const char *destpath)
 {
-	// TODO: folders
+	if (is_file_prefix(path, destpath)) {
+		return -EINVAL;
+	}
 	int i = find_node_index(storage, path);
 	if (i < 0) return i;
-	
-	if (storage.nodes[i].is_dir == 0) {
-		int j = find_node_index(storage, destpath);
-		if (j >= 0 && storage.nodes[j].is_dir == 0) tmpfs_unlink(destpath);
-		strcpy(storage.nodes[i].path, destpath);	
+
+	int j = find_node_index(storage, destpath);
+
+  if (j >= 0 && storage.nodes[j].is_dir == 1 && storage.nodes[i].is_dir == 0) {
+		return -EISDIR;
 	}
-	
+
+	if (j >= 0 && storage.nodes[j].is_dir == 0) tmpfs_unlink(destpath);
+	strcpy(storage.nodes[i].path, destpath);
+
+	return EXIT_SUCCESS;
+}
+
+int tmpfs_chmod(const char *path, mode_t) {
+	int i = find_node_index(storage, path);
+	if (i < 0) return i;
+
 	return EXIT_SUCCESS;
 }
 
@@ -326,6 +335,7 @@ struct fuse_operations operations = {
 	.rmdir       = tmpfs_rmdir,
 	.unlink      = tmpfs_unlink,
 	.rename      = tmpfs_rename,
+	.chmod       = tmpfs_chmod,
 };
 
 int main(int argc, char *argv[])

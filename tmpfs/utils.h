@@ -3,6 +3,7 @@
 #include <fnmatch.h>
 #include <string.h>
 #include <errno.h>
+#include <stdbool.h>
 
 #ifndef HEADERFILE_utils
 #define HEADERFILE_utils
@@ -16,5 +17,6 @@ int get_free_block_index(storage_t storage);
 int subdir(const char *dir, const char *path);
 int find_node_index(storage_t storage, const char *path);
 int free_block(storage_t storage, int index);
+bool is_file_prefix(const char *maybe_prefix, const char *string); // a is prefix of b
 
 #endif

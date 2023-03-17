@@ -2,7 +2,7 @@
 
 void nodes_init(storage_t storage) {
 	for (int i = 0; i < storage.inodes_max; i++) {
-		memset(&storage.nodes[i], 0, sizeof(storage_t));
+		memset(&storage.nodes[i], 0, sizeof(tmpfs_inode));
 		storage.nodes[i].start_block = BLOCK_INDEX_DEFAULT;
 	}
 }
@@ -60,4 +60,14 @@ int free_block(storage_t storage, int index) {
 	storage.blocks[index].next_block = BLOCK_INDEX_DEFAULT;
 
 	return next;
+}
+
+bool is_file_prefix(const char *maybe_prefix, const char *string) {
+	if (strncmp(maybe_prefix, string, strlen(maybe_prefix)) == 0) {
+		if (strlen(maybe_prefix) + 1 < strlen(string) && string[strlen(maybe_prefix) + 1] == '/') {
+			return true;
+		}
+	}
+
+	return false;
 }
