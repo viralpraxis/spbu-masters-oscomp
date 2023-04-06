@@ -1,0 +1,13 @@
+.Module.symvers.cmd
+.membuf.ko.cmd
+.membuf.mod.cmd
+.membuf.mod.o.cmd
+.membuf.o.cmd
+.modules.order.cmd
+Module.symvers
+membuf.ko
+membuf.mod
+membuf.mod.c
+membuf.mod.o
+membuf.o
+modules.order

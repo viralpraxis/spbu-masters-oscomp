@@ -17,44 +17,45 @@ MODULE_AUTHOR("yk");
 MODULE_DESCRIPTION("Membuf kernel module");
 MODULE_VERSION("1.0.0");
 
-static DEFINE_RWLOCK(kbuffer_rwlock);
-static DEFINE_MUTEX(kbuffer_mutex);
+static int devices_count;
+module_param(devices_count, int, 0600);
+MODULE_PARM_DESC(devices_count, "Total amount of devices available");
 
 static ssize_t dev_read(struct file*, char*, size_t, loff_t*);
 static ssize_t dev_write(struct file*, const char*, size_t, loff_t*);
 
 static struct file_operations operations = {
+     .owner = THIS_MODULE,
      .read = dev_read,
      .write = dev_write,
 };
 
+static struct cdev *cdev_array;
+static struct mutex *mutex_array;
+static struct class *my_class;
 
 dev_t dev = 0;
-static struct cdev chrdev_cdev;
-static struct class *membuf_class;
 static char kbuffer[BUFFER_SIZE];
 
-static ssize_t dev_write(struct file *filep, const char *buffer, size_t
+static ssize_t dev_write(struct file *f, const char *buffer, size_t
 len, loff_t* offset) {
    unsigned long to_copy;
+   int minor = iminor(file_inode(f));
 
-   mutex_lock(&kbuffer_mutex);
+   mutex_lock(&mutex_array[minor]);
 
    if (*offset >= sizeof(kbuffer)) {
-     mutex_unlock(&kbuffer_mutex);
+     mutex_unlock(&mutex_array[minor]);
      return EOF;
-   }
-
-   // write_lock(&kbuffer_rwlock);
+   };
 
    to_copy = MIN(len, sizeof(kbuffer));
    if (copy_from_user(kbuffer, buffer, to_copy)) {
-     mutex_unlock(&kbuffer_mutex);
+     mutex_unlock(&mutex_array[minor]);
      return -EFAULT;
    }
 
-   mutex_unlock(&kbuffer_mutex);
-   // write_unlock(&kbuffer_rwlock);
+   mutex_unlock(&mutex_array[minor]);
 
    *offset += len;
    return len;
@@ -64,12 +65,11 @@ static ssize_t dev_read(struct file *filep, char *buffer, size_t len,
 loff_t *offset) {
       unsigned long copy_result;
       unsigned long to_copy;
-
-      // read_lock(&kbuffer_rwlock);
-      mutex_lock(&kbuffer_mutex);
+      int minor = iminor(file_inode(filep));
+      mutex_lock(&mutex_array[minor]);
 
       if (*offset >= sizeof(kbuffer)) {
-         mutex_unlock(&kbuffer_mutex);
+         mutex_unlock(&mutex_array[minor]);
          return EOF;
       }
 
@@ -81,58 +81,71 @@ loff_t *offset) {
 
       copy_result = copy_to_user(buffer, kbuffer, to_copy);
       if (copy_result) {
-        mutex_unlock(&kbuffer_mutex);
+        mutex_unlock(&mutex_array[minor]);
         return -EFAULT;
       }
 
-      //read_unlock(&kbuffer_rwlock);
-      mutex_unlock(&kbuffer_mutex);
+      mutex_unlock(&mutex_array[minor]);
       *offset += to_copy;
       return to_copy;
 }
 
 static int __init kmodule_membuf_init(void) {
    int res;
+   int i;
 
-   if ((res = alloc_chrdev_region(&dev, 0, 1, "chrdev")) < 0) {
+   if (devices_count == 0) {
+     devices_count = 32;
+   }
+
+   pr_info("membuf: devices_count = %d", devices_count);
+
+   cdev_array = kmalloc(devices_count * sizeof(struct cdev), 0);
+   mutex_array = kmalloc(devices_count * sizeof(struct mutex), 0);
+
+   for (i = 0; i < devices_count; i++) {
+     mutex_init(&mutex_array[i]);
+    }
+
+   if ((res = alloc_chrdev_region(&dev, 0, devices_count, "membuf")) < 0) {
      pr_err("Error allocating major number\n");
      return res;
    }
 
-   pr_info("membuf: loaded, Major = %d Minor = %d\n", MAJOR(dev),
-MINOR(dev));
+   pr_info("membuf: loaded, Major = %d Minor = %d\n", MAJOR(dev), MINOR(dev));
 
-   cdev_init (&chrdev_cdev, &operations);
-   if ((res = cdev_add (&chrdev_cdev, dev, 1)) < 0) {
-     pr_err("membuf: device registering error\n");
-     unregister_chrdev_region (dev, 1);
-     return res;
-   }
+   int retval = -1;
+   int major = MAJOR(dev);
+   dev_t my_device;
 
-   if (IS_ERR(membuf_class = class_create (THIS_MODULE, "membuf_class"))) {
-     cdev_del (&chrdev_cdev);
-     unregister_chrdev_region (dev, 1);
-     return -1;
-   }
-
-   if (IS_ERR(device_create(membuf_class, NULL, dev, NULL, "membuf"))) {
-     pr_err("membuf: error creating device\n");
-     class_destroy (membuf_class);
-     cdev_del (&chrdev_cdev);
-     unregister_chrdev_region(dev, 1);
-     return -1;
-   } else {
-     pr_info("created device membuf\n");
+   my_class = class_create(THIS_MODULE, "membuf_class");
+   for (int i = 0; i < devices_count; i++) {
+     my_device = MKDEV(major, i);
+     cdev_init(&cdev_array[i], &operations);
+     retval = cdev_add(&cdev_array[i], my_device, 1);
+     if (retval < 0) {
+       pr_err("membuf: cdev_init failed\n");
+       return res;
+     } else {
+       device_create(my_class, NULL, my_device, NULL, "membuf%d", i);
+     }
    }
 
    return EXIT_SUCCESS;
 }
 
 static void __exit kmodule_membuf_exit(void) {
-     device_destroy (membuf_class, dev);
-     class_destroy (membuf_class);
-     cdev_del (&chrdev_cdev);
-     unregister_chrdev_region(dev, 1);
+     int major = MAJOR(dev);
+     dev_t my_device;
+
+     for (int i = 0; i < devices_count; i++) {
+       my_device = MKDEV(major, i);
+       cdev_del(&cdev_array[i]);
+       device_destroy(my_class, my_device);
+     }
+     class_destroy(my_class);
+
+     unregister_chrdev_region(dev, devices_count);
 
      kfree(kbuffer);
 
