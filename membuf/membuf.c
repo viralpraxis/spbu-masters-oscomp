@@ -42,27 +42,27 @@ static void acquire_exclusive_lock(void) {
 }
 
 static void release_exclusive_lock(void) {
-	for (int i = 0; i < DEVICES_COUNT; i++) {
-		mutex_unlock(&mutex_array[i]);
+  for (int i = 0; i < DEVICES_COUNT; i++) {
+    mutex_unlock(&mutex_array[i]);
   }
 }
 
 static int buffer_size_setter(const char *value, const struct kernel_param *kparam) {
   char **buffer_tmp;
-	int initial_size = buffer_size;
-	int retval;
+  int initial_size = buffer_size;
+  int retval;
   int i;
 
   printk(KERN_INFO "membuf: parameter 'buffer_size' is about to be updated\n");
 
-	acquire_exclusive_lock();
+  acquire_exclusive_lock();
 
   retval = param_set_uint(value, kparam);
-	if (retval < 0) {
+  if (retval < 0) {
     printk(KERN_ERR "membuf: failed to update parameter 'buffer_size\n");
-		release_exclusive_lock();
-		return retval;
-	}
+    release_exclusive_lock();
+    return retval;
+  }
 
   buffer_tmp = kmalloc(DEVICES_COUNT * sizeof(char *), 0);
   if (buffer_tmp == NULL) {
@@ -91,14 +91,14 @@ static int buffer_size_setter(const char *value, const struct kernel_param *kpar
 
   kfree(kbuffer);
   kbuffer = buffer_tmp;
-	release_exclusive_lock();
+  release_exclusive_lock();
 
-	return EXIT_SUCCESS;
+  return EXIT_SUCCESS;
 }
 
 static const struct kernel_param_ops kparam_buffer_size_ops = {
-	.set = buffer_size_setter,
-	.get = param_get_uint,
+  .set = buffer_size_setter,
+  .get = param_get_uint,
 };
 
 module_param_cb(buffer_size, &kparam_buffer_size_ops, &buffer_size, S_IWUSR | S_IRUSR); // Write and read permissions
