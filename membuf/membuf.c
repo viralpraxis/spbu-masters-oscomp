@@ -3,10 +3,11 @@
 #include <linux/init.h>
 #include <linux/fs.h>
 #include <linux/cdev.h>
+#include <linux/string.h>
 
 #define DEVNAME "membuf"
 #define MAX_DEVICES_COUNT 16
-#define INITIAL_DEVICES_COUNT 16
+#define INITIAL_DEVICES_COUNT 4
 #define MAX_BUFFER_SIZE 1024
 #define INITIAL_BUFFER_SIZE 256
 
@@ -68,60 +69,132 @@ static void release_exclusive_lock(void) {
 }
 
 static int buffer_size_getter(char *buffer, const struct kernel_param *kp) {
-  memcpy(buffer, &buffer_size_data, MAX_DEVICES_COUNT * sizeof(uint));
-  // FIXME
+  char data[32];
+  int i;
+  int offset = 0;
 
-  return MAX_DEVICES_COUNT * sizeof(uint);
+  for (i = 0; i < devices_count; i++) {
+    sprintf(data, "%d %d\n", i, buffer_size_data[i]);
+    memcpy(buffer + offset, data, strlen(data));
+
+    offset += strlen(data);
+  }
+
+  return offset;
 }
 
 static int devices_count_setter(const char *raw_value, const struct kernel_param *param) {
-  int value;
+  int i, previous_value, value, ret_value;
+
   if (atomic_read(&open_devices_count) > 0) {
     return -EINVAL;
   }
 
   acquire_exclusive_lock();
 
+  previous_value = devices_count;
+
   if (kstrtoint(raw_value, 10, &value) != 0) {
-    printk(KERN_ERR "membuf: failed to parse 'devices_count' param value");
+    printk(KERN_ERR "membuf: failed to parse 'devices_count' param value\n");
     release_exclusive_lock();
     return -EINVAL;
   }
 
-  printk(KERN_INFO "membuf: value: %d", value);
-
   if (value < 1 || value > MAX_DEVICES_COUNT) {
-    printk(KERN_ERR "membuf: invalid parameter 'devices_count' value");
+    printk(KERN_ERR "membuf: invalid parameter 'devices_count' value\n");
     release_exclusive_lock();
 
     return -EINVAL;
   } else {
-    printk(KERN_INFO "membuf: updated 'devices_count' param to %d", value);
+    printk(KERN_INFO "membuf: going to update 'devices_count' param to %d\n", value);
   }
+
+  if (value > previous_value) {
+    for (i = previous_value; i < value; i++) {
+      dev_t device_spec = MKDEV(MAJOR(dev), i);
+      cdev_init(&cdev_array[i], &operations);
+      cdev_add(&cdev_array[i], device_spec, 1);
+      device_create(my_class, NULL, device_spec, NULL, "membuf%d", i);
+      kbuffer[i] = kzalloc(buffer_size_data[i], 0);
+      if (kbuffer[i] == NULL) {
+        printk(KERN_ERR "membuf: failed to allocate memory\n");
+        while (i >= previous_value) {
+          kfree(kbuffer[i]);
+          cdev_del(&cdev_array[i]);
+          device_destroy(my_class, MKDEV(MAJOR(dev), i));
+        }
+        release_exclusive_lock();
+        return -1;
+      }
+    }
+  }
+
+  pr_info("membuf: updated 'devices_count' param to %d\n", value);
+  ret_value = param_set_uint(raw_value, param);
+
+  if (ret_value < 0) {
+    release_exclusive_lock();
+
+    for (i = previous_value; i < value; i++) {
+      kfree(kbuffer[i]);
+      cdev_del(&cdev_array[i]);
+      device_destroy(my_class, MKDEV(MAJOR(dev), i));
+    }
+    return -1;
+  }
+
+  devices_count = value - 1;
 
   release_exclusive_lock();
 
 
-  return param_set_uint(raw_value, param); 
+  return EXIT_SUCCESS;
 }
 
 static int buffer_size_setter(const char *raw_value, const struct kernel_param *kparam) {
+  int ret_value;
   uint device_index;
   uint value;
   uint initial_value;
-  char *tmp_buffer;
+  char *value_buffer, *tmp_buffer, *first_token, *second_token;
+  char *sep = " ";
 
   if (atomic_read(&open_devices_count) > 0) {
     return -EINVAL;
   }
 
-  memcpy(&device_index, raw_value, sizeof(uint));
-  memcpy(&value, (uint *) raw_value + 1, sizeof(uint));
+  value_buffer = kzalloc(strlen(raw_value), 0);
+  strcpy(value_buffer, raw_value);
+
+  first_token = strsep(&value_buffer, sep);
+  if (first_token == NULL) {
+    printk(KERN_ERR "membuf: invalid parameter 'buffer_size_data' value\n");
+    return -EINVAL;
+  }
+
+  second_token = strsep(&value_buffer, sep);
+  if (second_token == NULL) {
+    printk(KERN_ERR "membuf: invalid parameter 'buffer_size_data' value\n");
+    return -EINVAL;
+  }
+
+  pr_info("membuf: tokens: first: %s, second: %s\n", first_token, second_token);
+
+  ret_value = kstrtoint(first_token, 10, &device_index);
+  if (ret_value < 0) {
+    printk(KERN_ERR "membuf: invalid parameter 'buffer_size_data' value\n");
+    return -EINVAL;
+  }
+
+  ret_value = kstrtoint(second_token, 10, &value);
+  if (ret_value < 0) {
+    printk(KERN_ERR "membuf: invalid parameter 'buffer_size_data' value\n");
+    return -EINVAL;
+  }
 
   if (device_index > devices_count) {
-    printk(KERN_ERR "membuf: invalid parameter 'buffer_size_data' value");
-
-    return -1;
+    printk(KERN_ERR "membuf: invalid parameter 'buffer_size_data' value\n");
+    return -EINVAL;
   }
 
   initial_value = buffer_size_data[device_index];
@@ -262,14 +335,14 @@ static int __init kmodule_membuf_init(void) {
   int major;
   dev_t my_device;
 
-  cdev_array = kmalloc(devices_count * sizeof(struct cdev), 0);
-  mutex_array = kmalloc(devices_count * sizeof(struct mutex), 0);
+  cdev_array = kmalloc(MAX_DEVICES_COUNT * sizeof(struct cdev), 0);
+  mutex_array = kmalloc(MAX_DEVICES_COUNT * sizeof(struct mutex), 0);
 
-  for (i = 0; i < devices_count; i++) {
+  for (i = 0; i < MAX_DEVICES_COUNT; i++) {
     buffer_size_data[i] = INITIAL_BUFFER_SIZE;
   }
 
-  kbuffer = (char **) kzalloc(devices_count * sizeof(char *), 0);
+  kbuffer = (char **) kzalloc(MAX_DEVICES_COUNT * sizeof(char *), 0);
   if (kbuffer == NULL) {
     goto module_cleanup;
     printk(KERN_ERR "membuf: failed to allocate memory\n");
