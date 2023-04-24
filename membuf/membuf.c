@@ -85,18 +85,16 @@ static int buffer_size_getter(char *buffer, const struct kernel_param *kp) {
 
 static int devices_count_setter(const char *raw_value, const struct kernel_param *param) {
   int i, previous_value, value, ret_value;
+  dev_t device_spec;
 
   if (atomic_read(&open_devices_count) > 0) {
     return -EINVAL;
   }
 
-  acquire_exclusive_lock();
-
   previous_value = devices_count;
 
   if (kstrtoint(raw_value, 10, &value) != 0) {
     printk(KERN_ERR "membuf: failed to parse 'devices_count' param value\n");
-    release_exclusive_lock();
     return -EINVAL;
   }
 
@@ -111,7 +109,7 @@ static int devices_count_setter(const char *raw_value, const struct kernel_param
 
   if (value > previous_value) {
     for (i = previous_value; i < value; i++) {
-      dev_t device_spec = MKDEV(MAJOR(dev), i);
+      device_spec = MKDEV(MAJOR(dev), i);
       cdev_init(&cdev_array[i], &operations);
       cdev_add(&cdev_array[i], device_spec, 1);
       device_create(my_class, NULL, device_spec, NULL, "membuf%d", i);
@@ -123,9 +121,17 @@ static int devices_count_setter(const char *raw_value, const struct kernel_param
           cdev_del(&cdev_array[i]);
           device_destroy(my_class, MKDEV(MAJOR(dev), i));
         }
-        release_exclusive_lock();
-        return -1;
+        return -EINVAL;
       }
+    }
+  } else if (value < previous_value) {
+    for (i = value; i < previous_value; i++) {
+      mutex_lock(&mutex_array[i]);
+      device_spec = MKDEV(MAJOR(dev), i);
+      cdev_del(&cdev_array[i]);
+      device_destroy(my_class, device_spec);
+      kfree(kbuffer[i]);
+      mutex_unlock(&mutex_array[i]);
     }
   }
 
@@ -138,15 +144,11 @@ static int devices_count_setter(const char *raw_value, const struct kernel_param
     for (i = previous_value; i < value; i++) {
       kfree(kbuffer[i]);
       cdev_del(&cdev_array[i]);
-      device_destroy(my_class, MKDEV(MAJOR(dev), i));
     }
-    return -1;
+    return -EINVAL;
   }
 
-  devices_count = value - 1;
-
-  release_exclusive_lock();
-
+  devices_count = value;
 
   return EXIT_SUCCESS;
 }
