@@ -6,10 +6,12 @@
 #include <linux/string.h>
 
 #define DEVNAME "membuf"
-#define MAX_DEVICES_COUNT 16
+
 #define INITIAL_DEVICES_COUNT 4
-#define MAX_BUFFER_SIZE 1024
+#define MAX_DEVICES_COUNT 16
+
 #define INITIAL_BUFFER_SIZE 256
+#define MAX_BUFFER_SIZE 1024
 
 #define EXIT_SUCCESS 0
 #define EOF 0
@@ -33,6 +35,10 @@ static ssize_t dev_write(struct file*, const char*, size_t, loff_t*);
 static int dev_open(struct inode*, struct file*);
 static int dev_release(struct inode*, struct file*);
 
+static int buffer_size_getter(char *buffer, const struct kernel_param *kp);
+static int buffer_size_setter(const char *raw_value, const struct kernel_param *kparam);
+static int devices_count_setter(const char *raw_value, const struct kernel_param *param);
+
 static struct file_operations operations = {
   .owner = THIS_MODULE,
   .read = dev_read,
@@ -43,7 +49,7 @@ static struct file_operations operations = {
 
 static struct cdev *cdev_array;
 static struct mutex *mutex_array;
-static struct class *my_class;
+static struct class *membuf_class;
 
 dev_t dev = 0;
 
@@ -51,22 +57,38 @@ static int devices_count = INITIAL_DEVICES_COUNT;
 static int buffer_size_data[MAX_DEVICES_COUNT];
 static char **kbuffer;
 
+static const struct kernel_param_ops kparam_buffer_size_ops = {
+  .set = buffer_size_setter,
+  .get = buffer_size_getter,
+};
+
+static const struct kernel_param_ops kparam_devices_count_ops = {
+  .set = devices_count_setter,
+  .get = param_get_int,
+};
+
+module_param_cb(buffer_size_data, &kparam_buffer_size_ops, &buffer_size_data, S_IWUSR | S_IRUSR);
+MODULE_PARM_DESC(buffer_size_data, "Per-device buffer size");
+
+module_param_cb(devices_count, &kparam_devices_count_ops, &devices_count, S_IWUSR | S_IRUSR);
+MODULE_PARM_DESC(devices_count, "Total devices count");
+
 // NOTE: Single locking order guarantees lack of deadlocks.
-static void acquire_exclusive_lock(void) {
-  int i;
+// static void acquire_exclusive_lock(void) {
+//   int i;
 
-  for (i = 0; i < MAX_DEVICES_COUNT; i++) {
-    mutex_lock(&mutex_array[i]);
-  }
-}
+//   for (i = 0; i < MAX_DEVICES_COUNT; i++) {
+//     mutex_lock(&mutex_array[i]);
+//   }
+// }
 
-static void release_exclusive_lock(void) {
-  int i;
+// static void release_exclusive_lock(void) {
+//   int i;
 
-  for (i = 0; i < MAX_DEVICES_COUNT; i++) {
-    mutex_unlock(&mutex_array[i]);
-  }
-}
+//   for (i = 0; i < MAX_DEVICES_COUNT; i++) {
+//     mutex_unlock(&mutex_array[i]);
+//   }
+// }
 
 static int buffer_size_getter(char *buffer, const struct kernel_param *kp) {
   char data[32];
@@ -81,76 +103,6 @@ static int buffer_size_getter(char *buffer, const struct kernel_param *kp) {
   }
 
   return offset;
-}
-
-static int devices_count_setter(const char *raw_value, const struct kernel_param *param) {
-  int i, previous_value, value, ret_value;
-  dev_t device_spec;
-
-  if (atomic_read(&open_devices_count) > 0) {
-    return -EINVAL;
-  }
-
-  previous_value = devices_count;
-
-  if (kstrtoint(raw_value, 10, &value) != 0) {
-    printk(KERN_ERR "membuf: failed to parse 'devices_count' param value\n");
-    return -EINVAL;
-  }
-
-  if (value < 1 || value > MAX_DEVICES_COUNT) {
-    printk(KERN_ERR "membuf: invalid parameter 'devices_count' value\n");
-    release_exclusive_lock();
-
-    return -EINVAL;
-  } else {
-    printk(KERN_INFO "membuf: going to update 'devices_count' param to %d\n", value);
-  }
-
-  if (value > previous_value) {
-    for (i = previous_value; i < value; i++) {
-      device_spec = MKDEV(MAJOR(dev), i);
-      cdev_init(&cdev_array[i], &operations);
-      cdev_add(&cdev_array[i], device_spec, 1);
-      device_create(my_class, NULL, device_spec, NULL, "membuf%d", i);
-      kbuffer[i] = kzalloc(buffer_size_data[i], 0);
-      if (kbuffer[i] == NULL) {
-        printk(KERN_ERR "membuf: failed to allocate memory\n");
-        while (i >= previous_value) {
-          kfree(kbuffer[i]);
-          cdev_del(&cdev_array[i]);
-          device_destroy(my_class, MKDEV(MAJOR(dev), i));
-        }
-        return -EINVAL;
-      }
-    }
-  } else if (value < previous_value) {
-    for (i = value; i < previous_value; i++) {
-      mutex_lock(&mutex_array[i]);
-      device_spec = MKDEV(MAJOR(dev), i);
-      cdev_del(&cdev_array[i]);
-      device_destroy(my_class, device_spec);
-      kfree(kbuffer[i]);
-      mutex_unlock(&mutex_array[i]);
-    }
-  }
-
-  pr_info("membuf: updated 'devices_count' param to %d\n", value);
-  ret_value = param_set_uint(raw_value, param);
-
-  if (ret_value < 0) {
-    release_exclusive_lock();
-
-    for (i = previous_value; i < value; i++) {
-      kfree(kbuffer[i]);
-      cdev_del(&cdev_array[i]);
-    }
-    return -EINVAL;
-  }
-
-  devices_count = value;
-
-  return EXIT_SUCCESS;
 }
 
 static int buffer_size_setter(const char *raw_value, const struct kernel_param *kparam) {
@@ -216,22 +168,73 @@ static int buffer_size_setter(const char *raw_value, const struct kernel_param *
   return EXIT_SUCCESS;
 }
 
+static int devices_count_setter(const char *raw_value, const struct kernel_param *param) {
+  int i, previous_value, value, ret_value;
+  dev_t device_spec;
 
-static const struct kernel_param_ops kparam_buffer_size_ops = {
-  .set = buffer_size_setter,
-  .get = buffer_size_getter,
-};
+  if (atomic_read(&open_devices_count) > 0) {
+    return -EINVAL;
+  }
 
-static const struct kernel_param_ops kparam_devices_count_ops = {
-  .set = devices_count_setter,
-  .get = param_get_int,
-};
+  previous_value = devices_count;
 
-module_param_cb(buffer_size_data, &kparam_buffer_size_ops, &buffer_size_data, S_IWUSR | S_IRUSR);
-MODULE_PARM_DESC(buffer_size_data, "Per-device buffer size");
+  if (kstrtoint(raw_value, 10, &value) != 0) {
+    printk(KERN_ERR "membuf: failed to parse 'devices_count' param value\n");
+    return -EINVAL;
+  }
 
-module_param_cb(devices_count, &kparam_devices_count_ops, &devices_count, S_IWUSR | S_IRUSR);
-MODULE_PARM_DESC(devices_count, "Total devices count");
+  if (value < 1 || value > MAX_DEVICES_COUNT) {
+    printk(KERN_ERR "membuf: invalid parameter 'devices_count' value\n");
+
+    return -EINVAL;
+  } else {
+    printk(KERN_INFO "membuf: going to update 'devices_count' param to %d\n", value);
+  }
+
+  if (value > previous_value) {
+    for (i = previous_value; i < value; i++) {
+      device_spec = MKDEV(MAJOR(dev), i);
+      cdev_init(&cdev_array[i], &operations);
+      cdev_add(&cdev_array[i], device_spec, 1);
+      device_create(membuf_class, NULL, device_spec, NULL, "membuf%d", i);
+      kbuffer[i] = kzalloc(buffer_size_data[i], 0);
+      if (kbuffer[i] == NULL) {
+        printk(KERN_ERR "membuf: failed to allocate memory\n");
+        while (i >= previous_value) {
+          kfree(kbuffer[i]);
+          cdev_del(&cdev_array[i]);
+          device_destroy(membuf_class, MKDEV(MAJOR(dev), i));
+        }
+        return -EINVAL;
+      }
+    }
+  } else if (value < previous_value) {
+    for (i = value; i < previous_value; i++) {
+      mutex_lock(&mutex_array[i]);
+      device_spec = MKDEV(MAJOR(dev), i);
+      cdev_del(&cdev_array[i]);
+      device_destroy(membuf_class, device_spec);
+      kfree(kbuffer[i]);
+      mutex_unlock(&mutex_array[i]);
+    }
+  }
+
+  pr_info("membuf: updated 'devices_count' param to %d\n", value);
+  ret_value = param_set_uint(raw_value, param);
+
+  if (ret_value < 0) {
+    for (i = previous_value; i < value; i++) {
+      kfree(kbuffer[i]);
+      cdev_del(&cdev_array[i]);
+      device_destroy(membuf_class, MKDEV(MAJOR(dev), i));
+    }
+    return -EINVAL;
+  }
+
+  devices_count = value;
+
+  return EXIT_SUCCESS;
+}
 
 static int dev_open(struct inode *i, struct file *f) {
   atomic_inc(&open_devices_count);
@@ -329,7 +332,6 @@ static void dealocate_kbuffer(void) {
   }
 }
 
-
 static int __init kmodule_membuf_init(void) {
   int res;
   int i;
@@ -380,7 +382,7 @@ static int __init kmodule_membuf_init(void) {
   pr_info("membuf: loaded, Major = %d Minor = %d\n", MAJOR(dev), MINOR(dev));
 
   major = MAJOR(dev);
-  my_class = class_create(THIS_MODULE, "membuf_class");
+  membuf_class = class_create(THIS_MODULE, "membuf_class");
   class_created = true;
 
   for (int i = 0; i < devices_count; i++) {
@@ -392,7 +394,7 @@ static int __init kmodule_membuf_init(void) {
       goto module_cleanup;
 
     } else {
-      device_create(my_class, NULL, my_device, NULL, "membuf%d", i);
+      device_create(membuf_class, NULL, my_device, NULL, "membuf%d", i);
     }
   }
 
@@ -419,11 +421,11 @@ static int __init kmodule_membuf_init(void) {
       if (cdev_array->dev > 0) {
         cdev_del(&cdev_array[i]);
       }
-      device_destroy(my_class, my_device);
+      device_destroy(membuf_class, my_device);
     }
 
     if (class_created) {
-      class_destroy(my_class);
+      class_destroy(membuf_class);
     }
 
     return res;
@@ -434,15 +436,14 @@ static void __exit kmodule_membuf_exit(void) {
 
   for (int i = 0; i < devices_count; i++) {
     cdev_del(&cdev_array[i]);
-    device_destroy(my_class, MKDEV(major, i));
+    device_destroy(membuf_class, MKDEV(major, i));
   }
-  class_destroy(my_class);
+  class_destroy(membuf_class);
   unregister_chrdev_region(dev, MAX_DEVICES_COUNT);
   dealocate_kbuffer();
 
   printk(KERN_INFO "membuf: Unloaded module\n");
 }
-
 
 module_init(kmodule_membuf_init);
 module_exit(kmodule_membuf_exit);
