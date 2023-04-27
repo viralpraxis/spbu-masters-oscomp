@@ -152,6 +152,11 @@ static int buffer_size_setter(const char *raw_value, const struct kernel_param *
   }
 
   initial_value = buffer_size_data[device_index];
+  if (value > MAX_BUFFER_SIZE) {
+    pr_err("membuf: buffer size value exceeded limit of %d bytes\n", MAX_BUFFER_SIZE);
+    return -EINVAL;
+  }
+
   value = MIN(value, MAX_BUFFER_SIZE);
   mutex_lock(&mutex_array[device_index]);
   buffer_size_data[device_index] = value;
@@ -323,7 +328,7 @@ static void dealocate_kbuffer(void) {
   int i;
 
   if (kbuffer != NULL) {
-    for (i = 0; i < MAX_DEVICES_COUNT; i++) {
+    for (i = 0; i < devices_count; i++) {
       if (kbuffer[i] != NULL) {
         kfree(kbuffer[i]);
       }
