@@ -7,7 +7,6 @@
 #include <linux/kernel.h>
 #include <linux/init.h>
 
-// #include <linux/genhd.h>
 #include <linux/fs.h>
 #include <linux/blkdev.h>
 #include <linux/blk_types.h>
@@ -28,17 +27,16 @@ MODULE_LICENSE("GPL");
 #define MY_BLOCK_MINORS		1
 #define NR_SECTORS		128
 
-#define EXIT_SUCCESS 0
-
 #define KERNEL_SECTOR_SIZE	512
 
-/* TODO 6: use bios for read/write requests */
+#define EXIT_SUCCESS 0
+
+/* TODO 6/0: use bios for read/write requests */
 #define USE_BIO_TRANSFER	1
 
 
 static struct my_block_dev {
 	struct blk_mq_tag_set tag_set;
-	struct request_queue *queue;
 	struct gendisk *gd;
 	u8 *data;
 	size_t size;
@@ -68,30 +66,31 @@ static void my_block_transfer(struct my_block_dev *dev, sector_t sector,
 	if ((offset + len) > dev->size)
 		return;
 
-	/* TODO 3: read/write to dev buffer depending on dir */
-	if (dir) { // W
+	/* TODO 3/4: read/write to dev buffer depending on dir */
+	if (dir == 1)		/* write */
 		memcpy(dev->data + offset, buffer, len);
-	} else {
+	else
 		memcpy(buffer, dev->data + offset, len);
-	}
 }
 
 /* to transfer data using bio structures enable USE_BIO_TRANFER */
 #if USE_BIO_TRANSFER == 1
 static void my_xfer_request(struct my_block_dev *dev, struct request *req)
 {
+	/* TODO 6/10: iterate segments */
 	struct bio_vec bvec;
 	struct req_iterator iter;
-	/* TODO 6: iterate segments */
-	rq_for_each_segment(bvec, req, iter){
-		/* TODO 6: copy bio data to device buffer */
+
+	rq_for_each_segment(bvec, req, iter) {
 		sector_t sector = iter.iter.bi_sector;
-		size_t len = bvec.bv_len;
-		off_t offset = bvec.bv_offset;
-		int dir = (int) bio_data_dir(iter.bio);
+		unsigned long offset = bvec.bv_offset;
+		int len = bvec.bv_len;
+		int dir = bio_data_dir(iter.bio);
 		char *buffer = kmap_atomic(bvec.bv_page);
-		printk(KERN_LOG_LEVEL "%s: buf %8p offset %lu len %u", __func__, buffer, offset, len, dir);
-		my_block_transfer(dev, sector, len, buffer+offset, dir);
+		printk(KERN_LOG_LEVEL "%s: buf %8p offset %lu len %u dir %d\n", __func__, buffer, offset, len, dir);
+
+		/* TODO 6/3: copy bio data to device buffer */
+		my_block_transfer(dev, sector, len, buffer + offset, dir);
 		kunmap_atomic(buffer);
 	}
 }
@@ -106,34 +105,46 @@ static blk_status_t my_block_request(struct blk_mq_hw_ctx *hctx,
 
 	/* TODO 2: get pointer to request */
 	rq = bd->rq;
+
 	/* TODO 2: start request processing. */
 	blk_mq_start_request(rq);
-	/* TODO 2: check fs request. Return if passthrough. */
+
+	/* TODO 2/5: check fs request. Return if passthrough. */
 	if (blk_rq_is_passthrough(rq)) {
-		printk(KERN_NOTICE "skip non-fs request");
+		printk(KERN_NOTICE "blk_rq_is_passthrough\n");
 		blk_mq_end_request(rq, BLK_STS_IOERR);
+
 		goto out;
 	}
-	/* TODO 2: print request information */
+
 	if (rq_data_dir(rq)) {
-		direction = "w";
+		direction = "write";
 	} else {
-		direction = "r";
+		direction = "read";
 	}
 
-	printk(KERN_LOG_LEVEL "blockdev: pos: %llu; bytes=%u; dir=%c\n", blk_rq_pos(rq), blk_rq_cur_bytes(rq), direction);
+	/* TODO 2/6: print request information */
+	printk(KERN_LOG_LEVEL "mybdev: request: pos %llu, cur_bytes: %u, dir=%s\n", blk_rq_pos(rq), blk_rq_cur_bytes(rq), direction);
+	// printk(KERN_LOG_LEVEL
+	// 	"request received: pos=%llu bytes=%u "
+	// 	"cur_bytes=%u dir=%c\n",
+	// 	(unsigned long long) blk_rq_pos(rq),
+	// 	blk_rq_bytes(rq), blk_rq_cur_bytes(rq),
+	// 	rq_data_dir(rq) ? 'W' : 'R');
+
 #if USE_BIO_TRANSFER == 1
-	/* TODO 6: process the request by calling my_xfer_request */
+	/* TODO 6/1: process the request by calling my_xfer_request */
 	my_xfer_request(dev, rq);
 #else
-	/* TODO 3: process the request by calling my_block_transfer */
+	/* TODO 3/3: process the request by calling my_block_transfer */
 	my_block_transfer(dev, blk_rq_pos(rq),
-			blk_rq_bytes(rq),
-			bio_data(rq->bio), rq_data_dir(rq));
+			  blk_rq_bytes(rq),
+			  bio_data(rq->bio), rq_data_dir(rq));
 #endif
 
-	/* TODO 2: end request successfully */
+	/* TODO 2/1: end request successfully */
 	blk_mq_end_request(rq, BLK_STS_OK);
+
 out:
 	return BLK_STS_OK;
 }
@@ -163,47 +174,37 @@ static int create_block_device(struct my_block_dev *dev)
 	dev->tag_set.flags = BLK_MQ_F_SHOULD_MERGE;
 	err = blk_mq_alloc_tag_set(&dev->tag_set);
 	if (err) {
-	    printk(KERN_LOG_LEVEL "blk_mq_alloc_tag_set: can't allocate tag set\n");
+	    printk(KERN_ERR "blk_mq_alloc_tag_set: can't allocate tag set\n");
 	    goto out_alloc_tag_set;
 	}
 
-	/* Allocate queue. */
-	dev->queue = blk_mq_init_queue(&dev->tag_set);
-	if (IS_ERR(dev->queue)) {
-		printk(KERN_LOG_LEVEL "blk_mq_init_queue: out of memory\n");
-		err = -ENOMEM;
-		goto out_blk_init;
-	}
-	blk_queue_logical_block_size(dev->queue, KERNEL_SECTOR_SIZE);
-	dev->queue->queuedata = dev;
-
 	/* initialize the gendisk structure */
-	dev->gd = blk_alloc_disk(NUMA_NO_NODE); // kapi 6
+	dev->gd = blk_mq_alloc_disk(&dev->tag_set, dev);
 	if (!dev->gd) {
-		printk(KERN_LOG_LEVEL "alloc_disk: failure\n");
+		printk(KERN_ERR "mybdev: blk_mq_alloc_disk failed\n");
 		err = -ENOMEM;
-		goto out_alloc_disk;
+
+		goto out_blk_init;
 	}
 
 	dev->gd->major = MY_BLOCK_MAJOR;
 	dev->gd->first_minor = 0;
-	dev->gd->minors = MY_BLOCK_MINORS; // kapi 6
+	dev->gd->minors = 1; // KAPI 6
 	dev->gd->fops = &my_block_ops;
-	dev->gd->queue = dev->queue;
 	dev->gd->private_data = dev;
 	snprintf(dev->gd->disk_name, DISK_NAME_LEN, "myblock");
 	set_capacity(dev->gd, NR_SECTORS);
 
 	err = add_disk(dev->gd);
 	if (err) {
-		printk(KERN_ERR "add_disk: failure\n");
-		return err;
+		printk(KERN_LOG_LEVEL "mybdev: add_disk failed\n");
+		put_disk(dev->gd);
+
+		goto out_alloc_tag_set;
 	}
 
 	return EXIT_SUCCESS;
 
-out_alloc_disk:
-	blk_mq_destroy_queue(dev->queue);
 out_blk_init:
 	blk_mq_free_tag_set(&dev->tag_set);
 out_alloc_tag_set:
@@ -216,38 +217,34 @@ static int __init my_block_init(void)
 {
 	int err = 0;
 
-	/* TODO 1: register block device */
+	/* TODO 1/5: register block device */
 	err = register_blkdev(MY_BLOCK_MAJOR, MY_BLKDEV_NAME);
 	if (err < 0) {
-		printk(KERN_ERR "blockdev: register_bkldev_failed\n");
-
-		return -EBUSY;
+		printk(KERN_ERR "mybdev: register_blkdev failed\n");
+		return err;
 	}
-	/* TODO 2: create block device using create_block_device */
+
+	/* TODO 2/3: create block device using create_block_device */
 	err = create_block_device(&g_dev);
-	if(err){
-		printk(KERN_ERR: "blockdev: create_block_device failed\n");
+	if (err) {
 		goto out;
 	}
 
-  printk(KERN_INFO "blockdev: initialized\n");
 	return EXIT_SUCCESS;
 
 out:
-	/* TODO 2: unregister block device in case of an error */
+	/* TODO 2/1: unregister block device in case of an error */
 	unregister_blkdev(MY_BLOCK_MAJOR, MY_BLKDEV_NAME);
 	return err;
 }
 
 static void delete_block_device(struct my_block_dev *dev)
 {
-	if (dev->gd != NULL) {
+	if (dev->gd) {
 		del_gendisk(dev->gd);
 		put_disk(dev->gd);
 	}
 
-	if (dev->queue)
-		blk_mq_destroy_queue(dev->queue);
 	if (dev->tag_set.tags)
 		blk_mq_free_tag_set(&dev->tag_set);
 	if (dev->data)
@@ -256,10 +253,12 @@ static void delete_block_device(struct my_block_dev *dev)
 
 static void __exit my_block_exit(void)
 {
-	/* TODO 2: cleanup block device using delete_block_device */
+	/* TODO 2/1: cleanup block device using delete_block_device */
 	delete_block_device(&g_dev);
-	/* TODO 1: unregister block device */
+
+	/* TODO 1/1: unregister block device */
 	unregister_blkdev(MY_BLOCK_MAJOR, MY_BLKDEV_NAME);
+	printk(KERN_INFO "mybdev: module was removed\n");
 }
 
 module_init(my_block_init);

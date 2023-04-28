@@ -1,21 +1,10 @@
-KERNELRELEASE ?= $(shell uname -r)
-KERNELDIR ?= /lib/modules/$(KERNELRELEASE)/build
-PWD := $(shell pwd)
+EXTRA_CFLAGS = -Wall -g -Wno-unused
 
-obj-m += ram-disk.o
+obj-m = ram-disk.o
 
 all:
-		make -C /lib/modules/$(KERNELRELEASE)/build M=$(PWD) modules
-
-install:
-		make -C /lib/modules/$(KERNELRELEASE)/build M=$(PWD) modules_install
+	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules
 
 clean:
-		make -C /lib/modules/$(KERNELRELEASE)/build M=$(PWD) clean
-
-insmod:
-		sudo insmod membuf.ko
-
-rmmod:
-		sudo rmmod membuf
+	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) clean
 
