@@ -69,7 +69,7 @@ static void my_block_transfer(struct my_block_dev *dev, sector_t sector,
 		return;
 
 	/* TODO 3: read/write to dev buffer depending on dir */
-	if(dir){
+	if (dir) { // W
 		memcpy(dev->data + offset, buffer, len);
 	} else {
 		memcpy(buffer, dev->data + offset, len);
@@ -109,7 +109,7 @@ static blk_status_t my_block_request(struct blk_mq_hw_ctx *hctx,
 	/* TODO 2: start request processing. */
 	blk_mq_start_request(rq);
 	/* TODO 2: check fs request. Return if passthrough. */
-	if(blk_rq_is_passthrough(rq)){
+	if (blk_rq_is_passthrough(rq)) {
 		printk(KERN_NOTICE "skip non-fs request");
 		blk_mq_end_request(rq, BLK_STS_IOERR);
 		goto out;
@@ -218,18 +218,19 @@ static int __init my_block_init(void)
 
 	/* TODO 1: register block device */
 	err = register_blkdev(MY_BLOCK_MAJOR, MY_BLKDEV_NAME);
-	if(err<0){
-		printk(KERN_ERR "unable to register mybdev block device\n");
+	if (err < 0) {
+		printk(KERN_ERR "blockdev: register_bkldev_failed\n");
+
 		return -EBUSY;
 	}
 	/* TODO 2: create block device using create_block_device */
 	err = create_block_device(&g_dev);
 	if(err){
-		printk("[block_init] Error creating block device");
+		printk(KERN_ERR: "blockdev: create_block_device failed\n");
 		goto out;
 	}
 
-  printk(KERN_INFO "mybdev: initialized\n");
+  printk(KERN_INFO "blockdev: initialized\n");
 	return EXIT_SUCCESS;
 
 out:
@@ -240,7 +241,7 @@ out:
 
 static void delete_block_device(struct my_block_dev *dev)
 {
-	if (dev->gd) {
+	if (dev->gd != NULL) {
 		del_gendisk(dev->gd);
 		put_disk(dev->gd);
 	}
