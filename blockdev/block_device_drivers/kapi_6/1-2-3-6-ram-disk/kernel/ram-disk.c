@@ -32,7 +32,7 @@ MODULE_LICENSE("GPL");
 #define EXIT_SUCCESS 0
 
 /* TODO 6/0: use bios for read/write requests */
-#define USE_BIO_TRANSFER	1
+#define USE_BIO_TRANSFER	1 // KAPI 6
 
 
 static struct my_block_dev {
@@ -125,12 +125,6 @@ static blk_status_t my_block_request(struct blk_mq_hw_ctx *hctx,
 
 	/* TODO 2/6: print request information */
 	printk(KERN_LOG_LEVEL "mybdev: request: pos %llu, cur_bytes: %u, dir=%s\n", blk_rq_pos(rq), blk_rq_cur_bytes(rq), direction);
-	// printk(KERN_LOG_LEVEL
-	// 	"request received: pos=%llu bytes=%u "
-	// 	"cur_bytes=%u dir=%c\n",
-	// 	(unsigned long long) blk_rq_pos(rq),
-	// 	blk_rq_bytes(rq), blk_rq_cur_bytes(rq),
-	// 	rq_data_dir(rq) ? 'W' : 'R');
 
 #if USE_BIO_TRANSFER == 1
 	/* TODO 6/1: process the request by calling my_xfer_request */
