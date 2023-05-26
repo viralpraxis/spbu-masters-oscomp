@@ -105,11 +105,20 @@ ssize_t myfs_read(struct file *f, char __user *buffer, size_t len, loff_t *offse
     	return EOF;
     }
 
+
 	if (*offset >= MYFS_BLOCKSIZE) {
-        return 0;
+        return EOF;
 	}
 
 	to_copy = MIN(len, MYFS_BLOCKSIZE - *offset);
+
+
+    if (item->data == NULL) {
+    	memset(buffer, 0, len);
+    	*offset += to_copy;
+
+    	return to_copy;
+    }
 
 	copy_result = copy_to_user(buffer, item->data + *offset, to_copy);
 	if (copy_result > 0) {
@@ -119,7 +128,6 @@ ssize_t myfs_read(struct file *f, char __user *buffer, size_t len, loff_t *offse
 	*offset += to_copy;
 
 	return to_copy;
-	return 0;
 }
 
 ssize_t myfs_write(struct file* f, const char* buffer, size_t len, loff_t* offset){
@@ -166,6 +174,13 @@ ssize_t myfs_write(struct file* f, const char* buffer, size_t len, loff_t* offse
     return -ENOMEM;
   }
 
+  // if (first_one_bit == MYFS_BLOCKSIZE) {
+  //   item->last_block_payload = 0;
+  //   item->data = NULL;
+
+  //   return to_copy;
+  // }
+
   failed_write_count = copy_from_user(kbuffer_tmp, buffer, to_copy);
   if (failed_write_count > 0) {
     printk(KERN_ERR "myfs: Failed to write to tmp buffuer for write");
@@ -177,6 +192,14 @@ ssize_t myfs_write(struct file* f, const char* buffer, size_t len, loff_t* offse
   item->last_block_payload = MAX(item->last_block_payload, *offset + len);
 
   memcpy(page + *offset, kbuffer_tmp, to_copy);
+
+
+  int first_one_bit = find_first_bit((unsigned long) page, MYFS_BLOCKSIZE * 8);
+  printk("myfs: first one bit: %d\n", first_one_bit);
+
+  if (first_one_bit == MYFS_BLOCKSIZE * 8) {
+  	item->data = NULL;
+  }
 
   *offset += to_copy;
   return to_copy;
