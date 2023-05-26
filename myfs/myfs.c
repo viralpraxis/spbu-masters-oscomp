@@ -26,10 +26,12 @@ MODULE_LICENSE("GPL");
 
 /* declarations of functions that are part of operation structures */
 
-DECLARE_HASHTABLE(blocks_data, 3);
+DECLARE_HASHTABLE(blocks_data, 8);
 
 struct hnode {
 	char *data;
+	unsigned long ino;
+	int last_block_payload;
 	struct hlist_node node;
 };
 
@@ -92,9 +94,11 @@ ssize_t myfs_read(struct file *f, char __user *buffer, size_t len, loff_t *offse
 	pr_info("MYFS: read(len=%ld, off=%lld) for inode %lu\n", len, *offset, f_inode);
 
     hash_for_each_possible(blocks_data, cur_item, node, f_inode) {
-        item = cur_item;
-        found = true;
-        break;
+    	if (f_inode == cur_item->ino) {
+          item = cur_item;
+          found = true;
+          break;
+         }
     }
 
     if (!found) {
@@ -129,14 +133,18 @@ ssize_t myfs_write(struct file* f, const char* buffer, size_t len, loff_t* offse
   pr_info("MYFS: write(len=%ld, off=%lld) for inode %lu\n", len, *offset, f_inode);
 
   hash_for_each_possible(blocks_data, cur_item, node, f_inode) {
-    item = cur_item;
-    found = true;
-    break;
+  	if (cur_item->ino == f_inode) {
+        item = cur_item;
+        found = true;
+        break;
+    }
   }
 
   if (!found) {
     page = kzalloc(MYFS_BLOCKSIZE, 0);
     item = kzalloc(sizeof(struct hnode), 0);
+    item->ino = f_inode;
+    item->last_block_payload = 0;
     item->data = page;
     hash_add(blocks_data, &item->node, f_inode);
   } else {
@@ -159,12 +167,14 @@ ssize_t myfs_write(struct file* f, const char* buffer, size_t len, loff_t* offse
   }
 
   failed_write_count = copy_from_user(kbuffer_tmp, buffer, to_copy);
-  if (failed_write_count > 0) { // if we failed to copy entire buffer we prefer to abort entire operation
-    printk(KERN_ERR "Failed to write to tmp buffuer for write");
+  if (failed_write_count > 0) {
+    printk(KERN_ERR "myfs: Failed to write to tmp buffuer for write");
     kfree(kbuffer_tmp);
 
     return -EFAULT;
   }
+
+  item->last_block_payload = MAX(item->last_block_payload, *offset + len);
 
   memcpy(page + *offset, kbuffer_tmp, to_copy);
 
@@ -321,7 +331,7 @@ static int __init myfs_init(void)
 	/* TODO 1/1: register */
 	err = register_filesystem(&myfs_fs_type);
 	if (err) {
-		printk(LOG_LEVEL "register_filesystem failed\n");
+		printk(LOG_LEVEL "myfs: register_filesystem failed\n");
 
 		return err;
 	}
@@ -333,8 +343,15 @@ static int __init myfs_init(void)
 
 static void __exit myfs_exit(void)
 {
-	// struct hnode *cur;
-	// unsigned bkt;
+	struct hnode *cur;
+	unsigned bkt;
+
+    hash_for_each(blocks_data, bkt, cur, node) {
+      if (cur->data) {
+        kfree(cur->data);
+       }
+    }
+
 
 	unregister_filesystem(&myfs_fs_type);
 }
