@@ -93,43 +93,36 @@ static const struct inode_operations myfs_file_inode_operations = {
 };
 
 ssize_t myfs_read(struct file *f, char __user *buffer, size_t len, loff_t *offset) {
-    struct inode *vfs_inode = file_inode(f);
-    unsigned long f_inode = vfs_inode->i_ino;
-    size_t to_copy, left, done;
-    int block_index, ret;
-    struct hnode *target_node, *node;
+	struct inode *vfs_inode = file_inode(f);
+	unsigned long f_inode = vfs_inode->i_ino;
+	size_t to_copy, left, done;
+	int block_index, ret;
+	struct hnode *target_node, *node;
 
-    pr_info("MYFS: read(len=%ld, off=%lld) for inode %lu\n", len, *offset, f_inode);
+	pr_info("MYFS: read(len=%ld, off=%lld) for inode %lu\n", len, *offset, f_inode);
 
-    acquire_exclusive_hashtable_lock();
-    hash_for_each_possible(blocks_data, node, node, f_inode) {
-    	if (f_inode == node->ino) {
-          target_node = node;
-          break;
-         }
-    }
-    release_exclusive_hashtable_lock();
-
-    if (target_node == NULL) {
-    	return EOF;
-    }
-
-    vfs_inode->i_size = target_node->i_size;
-
-
-	if (*offset > vfs_inode->i_size) {
-        return EOF;
+	acquire_exclusive_hashtable_lock();
+	hash_for_each_possible(blocks_data, node, node, f_inode) {
+		if (f_inode == node->ino) {
+				target_node = node;
+				break;
+				}
 	}
+	release_exclusive_hashtable_lock();
 
-    pr_info("myfs: total bytes: %lld\n", target_node->vfs_inode->i_size);
+	if (target_node == NULL) return EOF;
+	vfs_inode->i_size = target_node->i_size;
+	if (*offset > vfs_inode->i_size) return EOF;
+
+	pr_info("myfs: total bytes: %lld\n", target_node->vfs_inode->i_size);
 	to_copy = MIN(len, target_node->vfs_inode->i_size - *offset);
 
-    pr_info("myfs: to_copy: %lu\n", to_copy);
+	pr_info("myfs: to_copy: %lu\n", to_copy);
 
-    if (target_node->blocks == NULL) {
-    	pr_info("myfs: empty read\n");
-    	return EOF;
-    }
+	if (target_node->blocks == NULL) {
+		pr_info("myfs: empty read\n");
+		return EOF;
+	}
 
   done = 0;
   left = to_copy;
@@ -186,7 +179,7 @@ ssize_t myfs_write(struct file* f, const char* buffer, size_t len, loff_t* offse
   	pr_info("myfs: could not find inode %lu\n", f_inode);
     target_node = kzalloc(sizeof(struct hnode), 0);
     target_node->ino = f_inode;
-    target_node->blocks = (char **) kzalloc(sizeof(char *), 0);	
+    target_node->blocks = (char **) kzalloc(sizeof(char *), 0);
     page = kzalloc(MYFS_BLOCKSIZE, 0);
     target_node->blocks[0] = page;
     target_node->vfs_inode = vfs_inode;
@@ -240,7 +233,7 @@ ssize_t myfs_write(struct file* f, const char* buffer, size_t len, loff_t* offse
 
   pr_info("myfs: block_index: %d, total: %llu, size: %lld, last: %d\n", block_index, vfs_inode->i_blocks, target_node->i_size, last_block_write);
 
-  if (block_index >= initial_blocks_count || 
+  if (block_index >= initial_blocks_count ||
   	  ((block_index == initial_blocks_count) && last_block_write > vfs_inode->i_size % MYFS_BLOCKSIZE)) {
   	pr_info("myfs: updates i_size to %llu\n", len + *offset);
     target_node->i_size = len + *offset;
@@ -330,23 +323,22 @@ int myfs_setattr(struct user_namespace *user_ns, struct dentry *dentry, struct i
 
 	pr_info("myfs: setattr\n");
 
-    error = setattr_prepare(user_ns, dentry, attr);
-    if (error)
-            return error;
+	error = setattr_prepare(user_ns, dentry, attr);
+	if (error)
+					return error;
 
-    if ((attr->ia_valid & ATTR_SIZE) &&
-        attr->ia_size != i_size_read(inode)) {
-            error = inode_newsize_ok(inode, attr->ia_size);
-            if (error)
-                    return error;
+	if ((attr->ia_valid & ATTR_SIZE) &&
+		attr->ia_size != i_size_read(inode)) {
+			error = inode_newsize_ok(inode, attr->ia_size);
+			if (error) return error;
 
-            truncate_setsize(inode, attr->ia_size);
-            pr_info("myfs: truncate: newsize: %lld\n", attr->ia_size);
-            //minix_truncate(inode);
-    }
+			truncate_setsize(inode, attr->ia_size);
+			pr_info("myfs: truncate: newsize: %lld\n", attr->ia_size);
+			//todo impl
+  }
 
-    setattr_copy(user_ns, inode, attr);
-    mark_inode_dirty(inode);
+	setattr_copy(user_ns, inode, attr);
+	mark_inode_dirty(inode);
 
 	return 0;
 }
@@ -448,18 +440,17 @@ static void __exit myfs_exit(void)
 	unsigned bkt;
 	int i;
 
-    acquire_exclusive_hashtable_lock();
-    hash_for_each(blocks_data, bkt, cur, node) {
-      if (cur->blocks) {
-      	for (i = 0; i < cur->vfs_inode->i_blocks; i++) {
-      		kfree(cur->blocks[i]);
-      	}
+	acquire_exclusive_hashtable_lock();
+	hash_for_each(blocks_data, bkt, cur, node) {
+		if (cur->blocks) {
+			for (i = 0; i < cur->vfs_inode->i_blocks; i++) {
+				kfree(cur->blocks[i]);
+			}
 
-        kfree(cur->blocks);
-       }
-    }
-    release_exclusive_hashtable_lock();
-
+			kfree(cur->blocks);
+			}
+	}
+	release_exclusive_hashtable_lock();
 
 	unregister_filesystem(&myfs_fs_type);
 }
