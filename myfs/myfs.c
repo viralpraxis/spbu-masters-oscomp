@@ -119,6 +119,11 @@ ssize_t myfs_read(struct file *f, char __user *buffer, size_t len, loff_t *offse
 
 	pr_info("myfs: to_copy: %lu\n", to_copy);
 
+	if (!to_copy) {
+		printk("myfs: nothing to read, EOF\n");
+		return EOF;
+	}
+
 	if (target_node->blocks == NULL) {
 		pr_info("myfs: empty read\n");
 		return EOF;
@@ -131,25 +136,31 @@ ssize_t myfs_read(struct file *f, char __user *buffer, size_t len, loff_t *offse
   down_read(&(vfs_inode->i_rwsem));
   if (*offset % MYFS_BLOCKSIZE != 0) {
   	if (!access_ok(buffer + done, MYFS_BLOCKSIZE - (*offset % MYFS_BLOCKSIZE))) {
+  		up_read(&(vfs_inode->i_rwsem));
   		return -EINVAL;
   	}
     ret = __copy_to_user(
     	buffer + done, target_node->blocks[block_index] + (*offset % MYFS_BLOCKSIZE),
     	(MYFS_BLOCKSIZE - (*offset % MYFS_BLOCKSIZE))
     );
-    left -= MYFS_BLOCKSIZE - ((*offset) % MYFS_BLOCKSIZE);
+    left -= (*offset) % MYFS_BLOCKSIZE;
     done += (*offset) % MYFS_BLOCKSIZE;
+    printk("myfs: blockind: %d, done: %ld, left: %ld\n", block_index, done, left);
     block_index += 1;
   }
 
   while (done < to_copy) {
   	if (!access_ok(buffer + done, MIN(left, MYFS_BLOCKSIZE))) {
+  		up_read(&(vfs_inode->i_rwsem));
   		return -EINVAL;
   	}
 
     ret = __copy_to_user(buffer + done, target_node->blocks[block_index], MIN(left, MYFS_BLOCKSIZE));
   	done += MIN(left, MYFS_BLOCKSIZE);
   	left -= MIN(left, MYFS_BLOCKSIZE);
+
+  	printk("myfs: blockind: %d, done: %ld, left: %ld\n", block_index, done, left);
+  	block_index += 1;
   }
   up_read(&(vfs_inode->i_rwsem));
 
@@ -440,7 +451,9 @@ static void __exit myfs_exit(void)
 	unsigned bkt;
 	int i;
 
+    pr_info("myfs: destruct: going to acquire excl lock\n");
 	acquire_exclusive_hashtable_lock();
+    pr_info("myfs: destruct: excl lock OK\n");
 	hash_for_each(blocks_data, bkt, cur, node) {
 		if (cur->blocks) {
 			for (i = 0; i < cur->vfs_inode->i_blocks; i++) {
